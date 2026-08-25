@@ -5,13 +5,22 @@ all_orientation_signals = np.load(
     "all_orientation_signals.npy"
 )
 
+# Normalize each precomputed profile so that its 24 bins sum to 1.
+# This removes the old TOTAL_SIGNAL = 240 scaling.
+all_orientation_signals = (
+    all_orientation_signals
+    / np.sum(all_orientation_signals, axis=1, keepdims=True)
+)
+
+# Sanity check:
+print(np.sum(all_orientation_signals, axis=1))
 
 """
 load 24 precomputed profiles
 → know how many orientations exist
 → generate every possible N-detector orientation combination
 → return those combinations"""
-def compute_sigma_array(all_orientation_signals, n_detectors):
+def compute_sigma_array(all_orientation_signals, n_detectors, total_signal, background_per_bin):
 
     orientation_options = np.arange( all_orientation_signals.shape[0])
 
@@ -29,7 +38,8 @@ def compute_sigma_array(all_orientation_signals, n_detectors):
     )
 
     # Use the orientation indices to retrieve the corresponding precomputed 24-bin signal profiles.
-    orientation_signal_array = all_orientation_signals[orientation_combinations]
+    # Retrieve the normalized profiles and scale each detector to the requested total signal count.
+    orientation_signal_array = (total_signal * all_orientation_signals[orientation_combinations])
 
      # Read the dimensions from the signal array.
     n_configs = orientation_signal_array.shape[0]
@@ -68,9 +78,6 @@ def compute_sigma_array(all_orientation_signals, n_detectors):
         :, :, common_background_index, :
     ] = common_background_shape
 
-    # Flat-background count used in the Fisher denominator.
-    background_per_bin = 100.0
-
     # Create one flat-background array for every
     # configuration, detector, and time bin.
     background_all = np.full(
@@ -95,7 +102,9 @@ def compute_sigma_array(all_orientation_signals, n_detectors):
         covariance_all[:, 0, 0]
     )
 
-    return sigma_A_all, orientation_combinations
+    ranking = np.argsort(sigma_A_all)
+
+    return sigma_A_all, orientation_combinations, ranking
 
 if __name__ == "__main__":
 
@@ -108,11 +117,27 @@ if __name__ == "__main__":
         help="Number of detectors to optimize"
     )
 
+    parser.add_argument(
+    "--total-signal",
+    type=float,
+    default=240.0,
+    help="Total signal counts per detector"
+    )
+
+    parser.add_argument(
+    "--background-per-bin",
+    type=float,
+    default=100.0,
+    help="Flat background counts per hourly bin"
+    )
+    
     args = parser.parse_args()
 
-    sigma_A_all, orientation_combinations = compute_sigma_array(
-        all_orientation_signals,
-        args.n_detectors
+    sigma_A_all, orientation_combinations, ranking = compute_sigma_array(
+    all_orientation_signals,
+    args.n_detectors,
+    args.total_signal,
+    args.background_per_bin
     )
 
     best_index = np.argmin(sigma_A_all)
@@ -123,3 +148,14 @@ if __name__ == "__main__":
         "Best orientations:",
         orientation_combinations[best_index]
     )
+
+    background_total = (
+    args.background_per_bin
+    * all_orientation_signals.shape[1]
+    )
+
+    signal_to_background = (
+        args.total_signal / background_total
+    )
+
+    print("S_tot / B_tot:", signal_to_background)
